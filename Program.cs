@@ -4,7 +4,8 @@ using MySql.Data.MySqlClient;
 class Program
 {
     // Byt ut "DITT_LÖSENORD" mot ditt faktiska lösenord till MySQL i DataGrip
-    static string connectionString = "Server=localhost;Database=holiday_maker;Uid=holiday_user;Pwd=mittlosenord123;";
+    static string connectionString = "Server=localhost;Database=Holiday_Maker;Uid=holiday_user;Pwd=mittlosenord123;";
+    static int selectedRoomId = -1;
     static int currentCustomerId = -1;
     static string currentCustomerName = "";
     static void Main(string[] args)
@@ -28,7 +29,7 @@ class Program
             Console.WriteLine("========================================");
             Console.Write("Välj ett alternativ (0-6): ");
 
-            string choice = Console.ReadLine();
+            string? choice = Console.ReadLine();
 
             switch (choice)
             {
@@ -110,7 +111,7 @@ class Program
         Console.WriteLine("========================================");
         Console.Write("Välj ett alternativ: ");
 
-        string choice = Console.ReadLine();
+        string? choice = Console.ReadLine();
 
         switch (choice)
         {
@@ -159,7 +160,8 @@ static void SelectExistingCustomer()
         }
 
         Console.Write("\nAnge ID på den kund du vill välja: ");
-        if (int.TryParse(Console.ReadLine(), out int customerId))
+        string? customerIdInput = Console.ReadLine();
+        if (int.TryParse(customerIdInput, out int customerId))
         {
             // Kontrollera att kunden finns
             using (MySqlConnection conn = new MySqlConnection(connectionString))
@@ -209,13 +211,13 @@ static void RegisterNewCustomer()
     Console.WriteLine("--- REGISTRERA NY KUND ---\n");
 
     Console.Write("Ange namn: ");
-    string name = Console.ReadLine();
+    string? name = Console.ReadLine();
 
     Console.Write("Ange e-post: ");
-    string email = Console.ReadLine();
+    string? email = Console.ReadLine();
 
     Console.Write("Ange telefonnummer: ");
-    string phone = Console.ReadLine();
+    string? phone = Console.ReadLine();
 
     if (string.IsNullOrWhiteSpace(name))
     {
@@ -262,16 +264,268 @@ static void RegisterNewCustomer()
 
     static void SearchRooms()
     {
-        Console.WriteLine("\n--- Sök Lediga Rum ---");
-        Console.WriteLine("Tryck på valfri tangent för att återgå.");
-        Console.ReadKey();
+    Console.Clear();
+    Console.WriteLine("--- RUMSÖVERBLICK OCH TILLGÄNGLIGHET ---\n");
+
+    Console.Write("Ange stad att titta på (t.ex. Stockholm, lämna tomt för alla): ");
+    string? city = Console.ReadLine();
+
+    try
+    {
+        using (MySqlConnection conn = new MySqlConnection(connectionString))
+        {
+            conn.Open();
+
+            // 1. Hämta alla rum (filtrerat på stad om användaren skrev en)
+            string query = @"
+                SELECT r.id, h.name AS hotel_name, r.room_number, r.capacity, r.price_per_night, h.city
+                FROM Rooms r
+                JOIN Hotels h ON r.hotels_id = h.id
+            ";
+
+            if (!string.IsNullOrWhiteSpace(city))
+            {
+                query += " WHERE h.city LIKE @city";
+            }
+
+            using (MySqlCommand cmd = new MySqlCommand(query, conn))
+            {
+                if (!string.IsNullOrWhiteSpace(city))
+                {
+                    cmd.Parameters.AddWithValue("@city", "%" + city + "%");
+                }
+
+                using (MySqlDataReader reader = cmd.ExecuteReader())
+                {
+                    Console.Clear();
+                    Console.WriteLine("--- RUM OCH BEFINTLIGA BOKNINGAR ---\n");
+                    Console.WriteLine($"{"ID",-5} | {"Hotell",-18} | {"Stad",-12} | {"Rum",-6} | {"Kapacitet",-9} | {"Pris/natt"}");
+                    Console.WriteLine(new string('-', 75));
+
+                    bool foundAny = false;
+                    List<int> roomIds = new List<int>();
+
+                    while (reader.Read())
+                    {
+                        foundAny = true;
+                        int roomId = reader.GetInt32("id");
+                        roomIds.Add(roomId);
+
+                        Console.WriteLine($"{roomId,-5} | {reader["hotel_name"],-18} | {reader["city"],-12} | {reader["room_number"],-6} | {reader["capacity"],-9} | {reader["price_per_night"]} kr");
+                    }
+
+                    if (!foundAny)
+                    {
+                        Console.WriteLine("\nInga rum hittades.");
+                        Console.WriteLine("\nTryck på valfri tangent för att återgå.");
+                        Console.ReadKey();
+                        return;
+                    }
+
+                    // 2. Visa vilka datum som är upptagna för rummen
+                    Console.WriteLine("\n\n--- BOKADE DATUM FÖR RUMMEN ---");
+                    bool hasBookings = false;
+
+                    string bookingQuery = @"
+                        SELECT room_id, check_in, check_out 
+                        FROM Bookings 
+                        WHERE check_out >= CURDATE()
+                        ORDER BY check_in ASC;
+                    ";
+
+                    // Stäng läsaren för rumsfrågan innan vi gör en ny fråga på samma koppling
+                    reader.Close();
+
+                    using (MySqlCommand bookingCmd = new MySqlCommand(bookingQuery, conn))
+                    {
+                        using (MySqlDataReader bookingReader = bookingCmd.ExecuteReader())
+                        {
+                            while (bookingReader.Read())
+                            {
+                                hasBookings = true;
+                                Console.WriteLine($"Rum ID {bookingReader["room_id"]}: Upptaget {(((DateTime)bookingReader["check_in"]).ToString("yyyy-MM-dd"))} till {(((DateTime)bookingReader["check_out"]).ToString("yyyy-MM-dd"))}");
+                            }
+                        }
+                    }
+
+                    if (!hasBookings)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Green;
+                        Console.WriteLine("Fantastiskt nyhet: Det finns inga aktiva framtida bokningar på några rum alls. Alla är helt lediga!");
+                        Console.ResetColor();
+                    }
+                }
+            }
+        }
+
+        // Låt användaren välja ett rum att gå vidare med
+        Console.Write("\nAnge ID på det rum du vill boka (eller 0 för att gå tillbaka): ");
+        if (int.TryParse(Console.ReadLine(), out int chosenId) && chosenId > 0)
+        {
+            selectedRoomId = chosenId;
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"\nRum med ID {selectedRoomId} har valts! Du kan nu gå vidare till att skapa bokning (Val 3).");
+            Console.ResetColor();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"\nEtt fel uppstod: {ex.Message}");
+        Console.ResetColor();
     }
 
+    Console.WriteLine("\nTryck på valfri tangent för att fortsätta.");
+    Console.ReadKey();
+    }
+
+    // SKAPAR BOKNING 
     static void CreateBooking()
+
     {
-        Console.WriteLine("\n--- Skapa Bokning ---");
-        Console.WriteLine("Tryck på valfri tangent för att återgå.");
+    Console.Clear();
+    Console.WriteLine("--- SKAPA BOKNING ---\n");
+
+    // 1. Kontrollera att en kund är vald
+    if (currentCustomerId == -1)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("Ingen kund är vald! Välj eller registrera en kund först (Val 1 i menyn).");
+        Console.ResetColor();
+        Console.WriteLine("\nTryck på valfri tangent för att återgå.");
         Console.ReadKey();
+        return;
+    }
+
+    // 2. Kontrollera att ett rum är valt
+    if (selectedRoomId == -1)
+    {
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.WriteLine("Inget rum är valt! Gå till rumsöversikten (Val 2) och välj ett rum först.");
+        Console.ResetColor();
+        Console.WriteLine("\nTryck på valfri tangent för att återgå.");
+        Console.ReadKey();
+        return;
+    }
+
+    Console.WriteLine($"Aktiv kund ID: {currentCustomerId}");
+    Console.WriteLine($"Valt rum ID: {selectedRoomId}");
+    Console.WriteLine("----------------------------------------");
+
+    Console.Write("Ange incheckningsdatum (ÅÅÅÅ-MM-DD): ");
+    string? checkIn = Console.ReadLine();
+
+    Console.Write("Ange utcheckningsdatum (ÅÅÅÅ-MM-DD): ");
+    string? checkOut = Console.ReadLine();
+
+    Console.Write("Ange antal gäster: ");
+    if (!int.TryParse(Console.ReadLine(), out int guests) || guests <= 0)
+    {
+        Console.WriteLine("Ogiltigt antal gäster. Avbryter.");
+        Console.ReadKey();
+        return;
+    }
+
+    try
+    {
+        using (MySqlConnection conn = new MySqlConnection(connectionString))
+        {
+            conn.Open();
+
+            // 3. Hämta pris per natt och kapacitet för det valda rummet
+            string roomQuery = "SELECT price_per_night, capacity FROM Rooms WHERE id = @roomId";
+            decimal pricePerNight = 0;
+            int capacity = 0;
+
+            using (MySqlCommand roomCmd = new MySqlCommand(roomQuery, conn))
+            {
+                roomCmd.Parameters.AddWithValue("@roomId", selectedRoomId);
+                using (MySqlDataReader reader = roomCmd.ExecuteReader())
+                {
+                    if (reader.Read())
+                    {
+                        pricePerNight = reader.GetDecimal("price_per_night");
+                        capacity = reader.GetInt32("capacity");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Det valda rummet kunde inte hittas i databasen.");
+                        Console.ReadKey();
+                        return;
+                    }
+                }
+            }
+
+            // Kontrollera att rummets kapacitet räcker
+            if (guests > capacity)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($"\nVarning: Rummet rymmer endast {capacity} gäster (du angav {guests}). Bokningen kan inte genomföras.");
+                Console.ResetColor();
+                Console.WriteLine("\nTryck på valfri tangent för att återgå.");
+                Console.ReadKey();
+                return;
+            }
+
+            // 4. Beräkna antal nätter och totalpris
+           if (!DateTime.TryParseExact(checkIn, "yyyy-MM-dd",
+        System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.None, out DateTime inDate) ||
+        !DateTime.TryParseExact(checkOut, "yyyy-MM-dd",
+        System.Globalization.CultureInfo.InvariantCulture,
+        System.Globalization.DateTimeStyles.None, out DateTime outDate))
+    {
+        Console.WriteLine("Ange datumen i formatet ÅÅÅÅ-MM-DD.");
+        Console.ReadKey();
+        return;
+    }
+            int nights = (int)(outDate - inDate).TotalDays;
+
+            if (nights <= 0)
+            {
+                Console.WriteLine("Utcheckningsdatum måste vara efter incheckningsdatum.");
+                Console.ReadKey();
+                return;
+            }
+
+            decimal totalPrice = nights * pricePerNight;
+
+            // 5. Spara bokningen i databasen
+            string insertQuery = @"
+                INSERT INTO Bookings (customer_id, room_id, check_in, check_out, amount_guests, total_price)
+                VALUES (@customerId, @roomId, @checkIn, @checkOut, @guests, @totalPrice);
+            ";
+
+            using (MySqlCommand insertCmd = new MySqlCommand(insertQuery, conn))
+            {
+                insertCmd.Parameters.AddWithValue("@customerId", currentCustomerId);
+                insertCmd.Parameters.AddWithValue("@roomId", selectedRoomId);
+                insertCmd.Parameters.AddWithValue("@checkIn", inDate);
+                insertCmd.Parameters.AddWithValue("@checkOut", outDate);
+                insertCmd.Parameters.AddWithValue("@guests", guests);
+                insertCmd.Parameters.AddWithValue("@totalPrice", totalPrice);
+
+                insertCmd.ExecuteNonQuery();
+
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine($"\nBokningen skapades framgångsrikt!");
+                Console.WriteLine($"Totalt pris: {totalPrice} kr ({nights} nätter).");
+                Console.ResetColor();
+                
+                // Nollställ det valda rummet så man inte bokar samma av misstag igen
+                selectedRoomId = -1;
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"\nEtt fel uppstod vid bokning: {ex.Message}");
+        Console.ResetColor();
+    }
+
+    Console.WriteLine("\nTryck på valfri tangent för att fortsätta.");
+    Console.ReadKey();
     }
 
     static void ShowCustomerBookings()
